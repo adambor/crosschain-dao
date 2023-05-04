@@ -32,4 +32,42 @@ DAO needs to select one chain - genesis smart chain, where the initial token dis
 To expand to other chains, a snapshot of current token distribution is taken, merkle root of all the token holders is created and a DAO smart contract on other chain is created with this merkle root. Any DAO participant can independently verify that this merkle root was correctly calculated based on the allocations from genesis smart chain at the time of expansion to the other chain.
 
 ### Token trading
-The tokens themsleves cannot be traded on the smart chains, as they are anchored in bitcoin blockchain. They can only be traded on bitcoin directly. Trading can be done either via atomic swaps, but those requires multiple transactions and are relatively slow, or via scriptless atomic swaps presented by Federico Tenga - [here](https://github.com/orgs/LNP-BP/discussions/125#discussioncomment-5728914). However scriptless atomic swaps do have their own set of drawbacks, which need to be addressed (the free option problem).
+The tokens themsleves cannot be traded directly on the smart chains, as they are anchored in bitcoin blockchain. They can only be traded on bitcoin directly or using CrossLightning also on other chains.
+
+#### Atomic swaps
+One can use on-chain atomic swaps for trustlessly swapping the tokens with counterparty. However on-chain atomic swaps do require 4 transactions in total (2 for in case of non-cooperation).
+
+#### Scriptless atomic swaps
+Idea presented by Federico Tenga originally for RGB protocol [here](https://github.com/orgs/LNP-BP/discussions/125#discussioncomment-5728914).
+
+Works by creating a transactions with 2 inputs and 2 outputs, where one of the inputs cotains the tokens from party A and other one contains bitcoin from party B. 1. output creates a state transition for the token from party A to party B and 2. output sends bitcoin from party B to party A. 
+
+##### Naive approach
+
+```
+Bitcoin UTXO from party B -> New bitcoin UTXO for party A  
+						  -> Optional change output for party B
+Token UTXO from party A -> OP_RETURN State transition to move tokens to party B
+```
+
+Party B specifies the UTXO he wishes to spend, UTXO on which he wants to receive the tokens from party A, and possibly also a change output script. The transaction is first shared unsigned to both parties. Then both parties sign it one by one.
+
+__Issue:__ However doing so will allow the second signer to keep the partially signed transaction and broadcast it at ANY future time (unless one of the input UTXOs is spent), this might be dangerous since you are basically giving an infinite-timed free option to the second signer. This cannot be mitigated purely by using bitcoin script either, since bitcoin timelock can only be used one-way - setting the transaction to be only valid AFTER specific time in the future, not other way around (valid only BEFORE specific time in the future).
+
+##### Correct approach
+
+```
+Bitcoin UTXO from party B -> New bitcoin UTXO for party A  
+						  -> Optional change output for party B
+Token UTXO from party A -> OP_RETURN State transition such that:
+	If transaction is included in a block number <= expiry E:
+		Pay the tokens to B
+	Else:
+		Pay the tokens to A
+```
+
+Party B specifies the UTXO he wants to spend, UTXO on which he wants to receive the tokens from party A, and possibly also a change output script. The transaction along with state transition with expiry E is then created by the party A, which also signs its input. State transition data and partially signed transaction is then sent to party B. Party B checks the transaction and state transition data, signs the transaction and broadcasts it (CAREFUL: The transaction needs to pay a fee high enough for it to be confirmed within the expiry E, otherwise party B will loose funds). If party B decides to wait for too long (abusing the free option) and the transaction confirms after expiry E, he won't get any tokens and he will also forfeit his bitcoin. Therefore it's in the best interest of party B to sign and broadcast the transaction as fast as possible.
+
+#### CrossLightning
+
+CrossLightning can also be used, allowing the DAO tokens to be traded against other tokens on other chains than bitcoin. This would however require some adjutments to CrossLightning protocol - specifically introducing a new swap type 3 and 4 - CHAIN_INPUT and CHAIN_NONCED_INPUT, where input UTXO is also considered when creating swap payment hash. This change would also allow CrossLightning to swap any token on bitcoin using single-use seals (like RGB or Taro)
